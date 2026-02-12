@@ -301,7 +301,7 @@ def main():
     p_scrape = subparsers.add_parser("scrape", help="Fetch feeds and transcribe new episodes")
     p_scrape.add_argument("-f", "--feeds-file", default=DEFAULT_FEEDS, help="Path to feeds.json")
     p_scrape.add_argument("-g", "--group", help="Feed group to scrape (default: all)")
-    p_scrape.add_argument("-n", "--max-episodes", type=int, default=1, help="Max episodes per feed (default: 1)")
+    p_scrape.add_argument("-n", "--max-episodes", type=int, default=10, help="Max episodes to check per feed (default: 10, dedup skips already-stored)")
     p_scrape.add_argument("--db", default=DEFAULT_DB, help="SQLite database path")
     p_scrape.add_argument("--cache-dir", default=DEFAULT_CACHE, help="Audio cache directory")
     p_scrape.add_argument("--model-size", default="base", help="Whisper model size (tiny/base/small/medium/large-v3)")
