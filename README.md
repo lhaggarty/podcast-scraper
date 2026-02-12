@@ -25,6 +25,10 @@ python3 src/cli.py scrape
 # Scrape a specific group, up to 3 episodes per feed
 python3 src/cli.py scrape -g macro -n 3
 
+# Ad-hoc: paste any RSS feed URL, transcribe + digest in one shot
+python3 src/cli.py adhoc https://feed.podbean.com/ttmygh/feed.xml
+python3 src/cli.py adhoc https://example.com/feed.xml --name "My Podcast" -n 2
+
 # Export recent transcripts to text file
 python3 src/cli.py export -o /tmp/podcasts_macro_export.txt
 
