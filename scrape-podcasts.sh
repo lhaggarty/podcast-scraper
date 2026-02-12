@@ -74,36 +74,22 @@ else
   echo "$LOG_PREFIX [export] Export failed or empty (exit: $EXPORT_EXIT)"
 fi
 
-# --- Notify via Open Claw Telegram ---
+# --- Report results (Telegram notification is handled by the Open Claw agent) ---
+# The cron agent reads the digest file and produces an AI summary before sending.
+# This script only sends alerts for failures.
 OPENCLAW="/Users/leonhaggarty/.nvm/versions/node/v24.13.0/bin/openclaw"
 TG_TARGET="6113620394"
 
-if [[ -x "$OPENCLAW" ]]; then
-  if [[ -n "$DIGEST_FLAG" && -f "$DIGEST_FLAG" ]]; then
-    # Send the digest file content (truncated if too long)
-    DIGEST_CONTENT=$(head -c 3000 "$DIGEST_FLAG")
-    "$OPENCLAW" message send \
-      --channel telegram \
-      --target "$TG_TARGET" \
-      -m "Podcast Digest ($GROUP):
-
-$DIGEST_CONTENT" \
-      2>/dev/null || true
-  elif [[ "$SCRAPE_EXIT" -eq 0 ]]; then
-    # Scrape succeeded but no digest — send basic stats
-    "$OPENCLAW" message send \
-      --channel telegram \
-      --target "$TG_TARGET" \
-      -m "Podcast scrape done ($GROUP). No digest generated — check scrape.log" \
-      2>/dev/null || true
-  else
-    # Scrape failed
-    "$OPENCLAW" message send \
-      --channel telegram \
-      --target "$TG_TARGET" \
-      -m "Podcast scrape FAILED ($GROUP, exit $SCRAPE_EXIT). Check ~/code/podcast-scraper/scrape.log" \
-      2>/dev/null || true
-  fi
+if [[ -n "$DIGEST_FLAG" && -f "$DIGEST_FLAG" ]]; then
+  echo "$LOG_PREFIX [result] Digest ready: $DIGEST_FLAG"
+  echo "DIGEST_FILE: $DIGEST_FLAG"
+elif [[ "$SCRAPE_EXIT" -ne 0 ]] && [[ -x "$OPENCLAW" ]]; then
+  # Only send Telegram for failures — the agent handles success notifications
+  "$OPENCLAW" message send \
+    --channel telegram \
+    --target "$TG_TARGET" \
+    -m "Podcast scrape FAILED ($GROUP, exit $SCRAPE_EXIT). Check ~/code/podcast-scraper/scrape.log" \
+    2>/dev/null || true
 fi
 
 echo "$LOG_PREFIX Finished (exit: $SCRAPE_EXIT)"
