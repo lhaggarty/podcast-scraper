@@ -74,17 +74,106 @@ else
   echo "$LOG_PREFIX [export] Export failed or empty (exit: $EXPORT_EXIT)"
 fi
 
-# --- Report results (Telegram notification is handled by the Open Claw agent) ---
-# The cron agent reads the digest file and produces an AI summary before sending.
-# This script only sends alerts for failures.
+# --- Step 4: AI summarization via Cursor Agent CLI ---
+# Try the Cursor Agent CLI first (cheaper model plan). If it fails, the calling
+# Open Claw cron agent will fall back to its own AI for summarization.
 OPENCLAW="/Users/leonhaggarty/.nvm/versions/node/v24.13.0/bin/openclaw"
 TG_TARGET="6113620394"
+AGENT_BIN="$HOME/.local/bin/agent"
+SUMMARY_FILE="/tmp/podcasts_${GROUP}_summary.txt"
+
+SUMMARY_OK=false
 
 if [[ -n "$DIGEST_FLAG" && -f "$DIGEST_FLAG" ]]; then
-  echo "$LOG_PREFIX [result] Digest ready: $DIGEST_FLAG"
+  echo "$LOG_PREFIX [step 4/4] Summarizing digest via Cursor Agent CLI..."
+
+  # Write the summarization prompt to a temp file (digest can be 20k+ words)
+  PROMPT_FILE=$(mktemp /tmp/podcast-summary-prompt.XXXXXX)
+  cat > "$PROMPT_FILE" <<PROMPT_EOF
+Read the podcast digest below and produce a concise briefing (300-500 words).
+For each podcast/author, highlight the key topics discussed, notable insights,
+and any actionable takeaways. Write as a natural briefing, not bullet points
+of raw transcript. Do NOT include any preamble like "Here is the summary".
+Just output the briefing text directly.
+
+--- DIGEST START ---
+$(cat "$DIGEST_FLAG")
+--- DIGEST END ---
+PROMPT_EOF
+
+  if [[ -x "$AGENT_BIN" ]]; then
+    # Use expect to allocate a PTY (agent CLI requires it)
+    EXPECT_SCRIPT=$(mktemp /tmp/podcast-summary-expect.XXXXXX)
+    cat > "$EXPECT_SCRIPT" <<'EXPECT_EOF'
+set timeout 120
+set prompt_file [lindex $argv 0]
+set agent_bin [lindex $argv 1]
+
+set fp [open $prompt_file r]
+set prompt [read $fp]
+close $fp
+
+spawn -noecho env TERM=xterm-256color {*}$agent_bin -p --model gemini-3-pro $prompt
+expect {
+    timeout { puts "AGENT_TIMEOUT"; exit 1 }
+    eof {}
+}
+lassign [wait] pid spawnid os_error exit_code
+exit $exit_code
+EXPECT_EOF
+
+    set +e
+    expect "$EXPECT_SCRIPT" "$PROMPT_FILE" "$AGENT_BIN" > "$SUMMARY_FILE" 2>/dev/null
+    AGENT_EXIT=$?
+    set -e
+    rm -f "$EXPECT_SCRIPT" "$PROMPT_FILE"
+
+    if [[ "$AGENT_EXIT" -eq 0 && -s "$SUMMARY_FILE" ]]; then
+      echo "$LOG_PREFIX [summary] Cursor Agent CLI succeeded"
+      SUMMARY_OK=true
+    else
+      AGENT_FAIL_REASON="exit code $AGENT_EXIT"
+      [[ "$AGENT_EXIT" -eq 1 ]] && grep -q "AGENT_TIMEOUT" "$SUMMARY_FILE" 2>/dev/null && AGENT_FAIL_REASON="timed out after 120s"
+      echo "$LOG_PREFIX [summary] Cursor Agent CLI failed ($AGENT_FAIL_REASON), flagging for Open Claw fallback"
+      rm -f "$SUMMARY_FILE"
+    fi
+  else
+    AGENT_FAIL_REASON="agent binary not found at $AGENT_BIN"
+    echo "$LOG_PREFIX [summary] $AGENT_FAIL_REASON, flagging for Open Claw fallback"
+    rm -f "$PROMPT_FILE"
+  fi
+fi
+
+# --- Send results ---
+if [[ "$SUMMARY_OK" == "true" && -s "$SUMMARY_FILE" ]]; then
+  # Cursor Agent produced a summary — send it directly to Telegram
+  SUMMARY_CONTENT=$(head -c 4000 "$SUMMARY_FILE")
+  if [[ -x "$OPENCLAW" ]]; then
+    "$OPENCLAW" message send \
+      --channel telegram \
+      --target "$TG_TARGET" \
+      -m "Podcast Digest ($GROUP):
+
+$SUMMARY_CONTENT" \
+      2>/dev/null || true
+    echo "$LOG_PREFIX [telegram] Summary sent via Cursor Agent"
+  fi
+  echo "SUMMARY_FILE: $SUMMARY_FILE"
+  echo "SUMMARY_SOURCE: cursor-agent"
+elif [[ -n "$DIGEST_FLAG" && -f "$DIGEST_FLAG" ]]; then
+  # Cursor Agent failed — notify user, then signal Open Claw to do fallback summarization
+  if [[ -x "$OPENCLAW" ]]; then
+    "$OPENCLAW" message send \
+      --channel telegram \
+      --target "$TG_TARGET" \
+      -m "[Podcast pipeline] Cursor Agent summarization failed (${AGENT_FAIL_REASON:-unknown}). Falling back to Open Claw AI. Digest is ready and will be summarized shortly." \
+      2>/dev/null || true
+  fi
+  echo "$LOG_PREFIX [result] Digest ready (Cursor Agent failed: ${AGENT_FAIL_REASON:-unknown}) — Open Claw agent should summarize: $DIGEST_FLAG"
   echo "DIGEST_FILE: $DIGEST_FLAG"
+  echo "AGENT_FAIL_REASON: ${AGENT_FAIL_REASON:-unknown}"
+  echo "SUMMARY_SOURCE: needs-fallback"
 elif [[ "$SCRAPE_EXIT" -ne 0 ]] && [[ -x "$OPENCLAW" ]]; then
-  # Only send Telegram for failures — the agent handles success notifications
   "$OPENCLAW" message send \
     --channel telegram \
     --target "$TG_TARGET" \
