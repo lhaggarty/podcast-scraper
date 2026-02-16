@@ -181,5 +181,31 @@ elif [[ "$SCRAPE_EXIT" -ne 0 ]] && [[ -x "$OPENCLAW" ]]; then
     2>/dev/null || true
 fi
 
+# --- Store summary in MongoDB (if one was generated) ---
+if [[ "$SUMMARY_OK" == "true" && -s "$SUMMARY_FILE" ]]; then
+  TWITTER_SCRAPER_DIR="/Users/leonhaggarty/code/twitter-scraper"
+  if [[ -f "$TWITTER_SCRAPER_DIR/src/store-summary.ts" ]]; then
+    echo "$LOG_PREFIX [mongo] Storing summary in MongoDB..."
+    (
+      cd "$TWITTER_SCRAPER_DIR" \
+      && bun run src/store-summary.ts -- \
+        --group "$GROUP" --source podcast \
+        --summary-file "$SUMMARY_FILE" \
+        -m "${MONGO_URI:-${ATLAS_URI:-}}" 2>&1
+    ) || echo "$LOG_PREFIX [mongo] Summary storage failed (non-fatal)"
+  fi
+fi
+
+# --- Audio Digest: generate audio version of the digest ---
+AUDIO_DIGEST_DIR="/Users/leonhaggarty/code/audio-digest"
+if [[ -f "$DIGEST_FILE" && -d "$AUDIO_DIGEST_DIR/venv" ]]; then
+  echo "$LOG_PREFIX [audio] Generating audio episode from digest..."
+  (
+    cd "$AUDIO_DIGEST_DIR" \
+    && source venv/bin/activate \
+    && python -m engine.cli generate "$DIGEST_FILE" --source podcast --group "$GROUP" 2>&1
+  ) || echo "$LOG_PREFIX [audio] Audio generation failed (non-fatal)"
+fi
+
 echo "$LOG_PREFIX Finished (exit: $SCRAPE_EXIT)"
 exit "$SCRAPE_EXIT"
