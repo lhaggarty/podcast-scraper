@@ -7,16 +7,16 @@
     {
       "name": "Redefining Energy",
       "feed_url": "https://www.spreaker.com/show/3170008/episodes/feed"
+    },
+    {
+      "name": "The Loonie Hour",
+      "feed_url": "https://feeds.acast.com/public/shows/617830b991820a0013d5a498"
     }
   ],
   "crypto": [
     {
       "name": "On The Brink with Castle Island",
       "feed_url": "https://rss.libsyn.com/shows/214379/destinations/1552766.xml"
-    },
-    {
-      "name": "The Loonie Hour",
-      "feed_url": "https://feeds.acast.com/public/shows/617830b991820a0013d5a498"
     }
   ]
 }
