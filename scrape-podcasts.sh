@@ -192,16 +192,24 @@ if [[ "$SUMMARY_OK" == "true" && -s "$SUMMARY_FILE" ]]; then
   fi
 fi
 
-# --- Audio Digest: generate audio version of the digest ---
+# --- Audio Digest: generate audio version ---
 AUDIO_DIGEST_DIR="/Users/leonhaggarty/code/audio-digest"
-if [[ -f "$DIGEST_FILE" && -d "$AUDIO_DIGEST_DIR/venv" ]]; then
-  echo "$LOG_PREFIX [audio] Generating audio episode from digest..."
-  (
-    cd "$AUDIO_DIGEST_DIR" \
-    && source venv/bin/activate \
-    && python -m engine.cli generate "$DIGEST_FILE" --source podcast --group "$GROUP" \
-       ${SUMMARY_FILE:+--summary-file "$SUMMARY_FILE"} 2>&1
-  ) || echo "$LOG_PREFIX [audio] Audio generation failed (non-fatal)"
+if [[ -d "$AUDIO_DIGEST_DIR/venv" ]]; then
+  AUDIO_SOURCE=""
+  if [[ -s "$SUMMARY_FILE" ]]; then
+    AUDIO_SOURCE="$SUMMARY_FILE"
+    echo "$LOG_PREFIX [audio] Generating audio from AI summary..."
+  elif [[ -f "$DIGEST_FILE" ]]; then
+    AUDIO_SOURCE="$DIGEST_FILE"
+    echo "$LOG_PREFIX [audio] Generating audio from raw digest (no summary available)..."
+  fi
+  if [[ -n "$AUDIO_SOURCE" ]]; then
+    (
+      cd "$AUDIO_DIGEST_DIR" \
+      && source venv/bin/activate \
+      && python -m engine.cli generate "$AUDIO_SOURCE" --source podcast --group "$GROUP" 2>&1
+    ) || echo "$LOG_PREFIX [audio] Audio generation failed (non-fatal)"
+  fi
 fi
 
 echo "$LOG_PREFIX Finished (exit: $SCRAPE_EXIT)"
