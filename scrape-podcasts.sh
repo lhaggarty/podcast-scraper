@@ -109,11 +109,7 @@ set timeout 120
 set prompt_file [lindex $argv 0]
 set agent_bin [lindex $argv 1]
 
-set fp [open $prompt_file r]
-set prompt [read $fp]
-close $fp
-
-spawn -noecho env TERM=xterm-256color {*}$agent_bin -p --model gemini-3-pro $prompt
+spawn -noecho sh -c "cat $prompt_file | env TERM=xterm-256color $agent_bin -p --model gemini-3-pro"
 expect {
     timeout { puts "AGENT_TIMEOUT"; exit 1 }
     eof {}
