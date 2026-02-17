@@ -199,7 +199,8 @@ if [[ -f "$DIGEST_FILE" && -d "$AUDIO_DIGEST_DIR/venv" ]]; then
   (
     cd "$AUDIO_DIGEST_DIR" \
     && source venv/bin/activate \
-    && python -m engine.cli generate "$DIGEST_FILE" --source podcast --group "$GROUP" 2>&1
+    && python -m engine.cli generate "$DIGEST_FILE" --source podcast --group "$GROUP" \
+       ${SUMMARY_FILE:+--summary-file "$SUMMARY_FILE"} 2>&1
   ) || echo "$LOG_PREFIX [audio] Audio generation failed (non-fatal)"
 fi
 
