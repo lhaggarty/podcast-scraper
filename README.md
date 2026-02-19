@@ -230,6 +230,18 @@ Step 4: AI summarization via Cursor Agent CLI (with Open Claw fallback)
   → Send summary to Telegram
 ```
 
+### Server-side summary (recommended)
+
+If you set these env vars, the script will call the server pipeline first and skip
+local summarization + Telegram send on success (to avoid duplicates):
+
+```bash
+export WEBHOOK_CRON_URL="https://elaborate-conkies-8ddce1z.netlify.app"
+export WEBHOOK_CRON_API_TOKEN="..." # Bearer token for /api/pipelines/podcast-summary
+```
+
+When running `./scrape-podcasts.sh all`, it will send separate digests per group.
+
 ### Usage
 
 ```bash
@@ -238,6 +250,9 @@ Step 4: AI summarization via Cursor Agent CLI (with Open Claw fallback)
 
 # Specific group
 ./scrape-podcasts.sh crypto
+
+# All groups (separate digest per group)
+./scrape-podcasts.sh all
 ```
 
 ### Summarization strategy

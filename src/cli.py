@@ -1,6 +1,7 @@
 """CLI entry point for the podcast scraper."""
 
 import argparse
+import json
 import os
 import sys
 
@@ -13,7 +14,7 @@ if REPO_DIR not in sys.path:
 from src.feed import load_feeds, parse_feed, fetch_transcript
 from src.transcribe import download_audio, transcribe_audio
 from src import db
-from src.export import export_transcripts
+from src.export import export_transcripts, export_transcripts_json
 
 
 DEFAULT_DB = os.path.join(REPO_DIR, "data", "podcasts.db")
@@ -139,6 +140,33 @@ def cmd_export(args):
 
     if result["episode_count"] == 0:
         sys.exit(1)
+
+
+def cmd_export_json(args):
+    """Export recent transcripts as a size-bounded JSON payload (excerpted)."""
+    group_feeds = None
+    if args.group:
+        feeds = load_feeds(args.feeds_file)
+        if args.group not in feeds:
+            print(f"Error: group '{args.group}' not found in {args.feeds_file}")
+            sys.exit(1)
+        group_feeds = [f["name"] for f in feeds[args.group]]
+
+    payload = export_transcripts_json(
+        db_path=args.db,
+        lookback_hours=args.lookback,
+        group_feeds=group_feeds,
+        max_episodes_total=args.max_episodes_total,
+        max_episodes_per_feed=args.max_episodes_per_feed,
+        excerpt_chars=args.excerpt_chars,
+    )
+
+    # Important: print ONLY JSON so bash can pipe it into curl -d.
+    output = {
+        "group": args.group or "all",
+        **payload,
+    }
+    print(json.dumps(output, ensure_ascii=True))
 
 
 def cmd_list(args):
@@ -325,6 +353,19 @@ def main():
     p_export.add_argument("-o", "--output", help="Output file path (default: /tmp/podcasts_{group}_export.txt)")
     p_export.add_argument("--db", default=DEFAULT_DB, help="SQLite database path")
 
+    # --- export-json ---
+    p_export_json = subparsers.add_parser(
+        "export-json",
+        help="Export excerpted transcripts as JSON for server summarization",
+    )
+    p_export_json.add_argument("-f", "--feeds-file", default=DEFAULT_FEEDS, help="Path to feeds.json")
+    p_export_json.add_argument("-g", "--group", help="Feed group to export")
+    p_export_json.add_argument("-l", "--lookback", type=int, default=168, help="Lookback hours (default: 168 = 7 days)")
+    p_export_json.add_argument("--max-episodes-total", type=int, default=40, help="Max episodes to include across all feeds (default: 40)")
+    p_export_json.add_argument("--max-episodes-per-feed", type=int, default=4, help="Max episodes per feed (default: 4)")
+    p_export_json.add_argument("--excerpt-chars", type=int, default=10000, help="Max chars per transcript excerpt (default: 10000)")
+    p_export_json.add_argument("--db", default=DEFAULT_DB, help="SQLite database path")
+
     # --- list ---
     p_list = subparsers.add_parser("list", help="List stored episodes")
     p_list.add_argument("--db", default=DEFAULT_DB, help="SQLite database path")
@@ -338,6 +379,8 @@ def main():
         cmd_adhoc(args)
     elif args.command == "export":
         cmd_export(args)
+    elif args.command == "export-json":
+        cmd_export_json(args)
     elif args.command == "list":
         cmd_list(args)
 

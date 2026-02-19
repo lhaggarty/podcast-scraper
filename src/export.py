@@ -1,6 +1,8 @@
 """Export transcripts to text files for the text-summary-tool pipeline."""
 
 import os
+import re
+from collections import defaultdict
 from typing import Optional
 
 from . import db
@@ -88,4 +90,94 @@ def export_transcripts(
         "episode_count": len(blocks),
         "output_path": output_path,
         "total_words": total_words,
+    }
+
+
+def _normalize_excerpt_text(text: str) -> str:
+    # Keep paragraphs, but collapse very noisy whitespace.
+    t = text.replace("\r\n", "\n").replace("\r", "\n")
+    t = re.sub(r"[ \t]+", " ", t)
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()
+
+
+def _excerpt_transcript(text: str, max_chars: int) -> str:
+    t = _normalize_excerpt_text(text)
+    if max_chars <= 0:
+        return ""
+    if len(t) <= max_chars:
+        return t
+
+    sep = "\n...\n"
+    overhead = len(sep) * 2
+    budget = max_chars - overhead
+    if budget <= 0:
+        return t[:max_chars].strip()
+
+    part = max(200, budget // 3)
+    head = t[:part]
+
+    mid_start = max(0, (len(t) // 2) - (part // 2))
+    mid = t[mid_start : mid_start + part]
+
+    tail = t[-part:]
+
+    return (head.strip() + sep + mid.strip() + sep + tail.strip()).strip()
+
+
+def export_transcripts_json(
+    db_path: str,
+    lookback_hours: int = 168,
+    group_feeds: Optional[list[str]] = None,
+    max_episodes_total: int = 40,
+    max_episodes_per_feed: int = 4,
+    excerpt_chars: int = 10000,
+) -> dict:
+    """Export recent transcripts as a size-bounded JSON payload for server summarization.
+
+    This is designed for piping into a server-side summarizer endpoint. It intentionally
+    includes transcript excerpts (not full transcripts) to keep payloads bounded.
+    """
+    conn = db.connect(db_path)
+
+    if group_feeds:
+        episodes = db.fetch_by_group(conn, group_feeds, lookback_hours)
+    else:
+        episodes = db.fetch_recent(conn, lookback_hours)
+
+    conn.close()
+
+    selected = []
+    per_feed_counts = defaultdict(int)
+
+    for ep in episodes:
+        if len(selected) >= max_episodes_total:
+            break
+
+        transcript = ep.get("transcript") or ""
+        if not transcript.strip():
+            continue
+
+        feed_name = ep.get("feed_name") or ""
+        if max_episodes_per_feed > 0 and per_feed_counts[feed_name] >= max_episodes_per_feed:
+            continue
+
+        selected.append(
+            {
+                "episodeId": ep.get("id"),
+                "feedName": feed_name,
+                "title": ep.get("title") or "",
+                "publishedAt": ep.get("published_at"),
+                "scrapedAt": ep.get("scraped_at"),
+                "wordCount": ep.get("word_count") or 0,
+                "transcriptExcerpt": _excerpt_transcript(transcript, excerpt_chars),
+            }
+        )
+        per_feed_counts[feed_name] += 1
+
+    return {
+        "episodeCount": len(selected),
+        "feedCount": len([k for k, v in per_feed_counts.items() if v > 0]),
+        "lookbackHours": lookback_hours,
+        "episodes": selected,
     }
