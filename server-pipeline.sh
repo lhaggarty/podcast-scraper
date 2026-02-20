@@ -2,7 +2,7 @@
 # server-pipeline.sh — podcast server pipeline helper
 # Modes:
 #   cache   -> push excerpt payloads to server cache only (no summary send)
-#   trigger -> trigger server summary from cached excerpts
+#   trigger -> trigger server summary from cached excerpts (Ollama fallback on failure)
 #
 # Usage:
 #   ./server-pipeline.sh cache all
@@ -19,6 +19,9 @@ TARGET="${2:-all}"
 LOOKBACK_HOURS="${LOOKBACK_HOURS:-168}"
 SEND_TO_TELEGRAM="${SEND_TO_TELEGRAM:-true}"
 DRY_RUN="${DRY_RUN:-false}"
+OLLAMA_WRAPPER="${OLLAMA_WRAPPER:-/Users/leonhaggarty/code/text-summary-tool/ollama-fallback.py}"
+OPENCLAW_BIN="${OPENCLAW_BIN:-/Users/leonhaggarty/.nvm/versions/node/v24.13.0/bin/openclaw}"
+TELEGRAM_TARGET="${TELEGRAM_TARGET:-6113620394}"
 
 case "$SEND_TO_TELEGRAM" in
   1|true|TRUE|yes|YES) SEND_TO_TELEGRAM="true" ;;
@@ -123,6 +126,84 @@ print(f"[cache] {group}: {data.get('status', 'ok')} (cachedCount={data.get('cach
 PY
 }
 
+trigger_ollama_fallback() {
+  local group="$1"
+  local excerpt_file
+  local prompt_file
+  local summary_file
+  local summary_content
+
+  if [[ ! -f "$OLLAMA_WRAPPER" ]]; then
+    echo "[trigger] $group: ollama wrapper not found at $OLLAMA_WRAPPER"
+    return 1
+  fi
+
+  excerpt_file="$(mktemp /tmp/podcast-ollama-excerpt.XXXXXX.json)"
+  prompt_file="$(mktemp /tmp/podcast-ollama-prompt.XXXXXX.txt)"
+  summary_file="/tmp/podcast_${group}_summary.txt"
+
+  if ! python3 src/cli.py export-json -g "$group" -l "$LOOKBACK_HOURS" \
+    --max-episodes-total 24 --max-episodes-per-feed 3 --excerpt-chars 5000 \
+    > "$excerpt_file"; then
+    echo "[trigger] $group: failed to build local excerpt payload for Ollama fallback"
+    rm -f "$excerpt_file" "$prompt_file"
+    return 1
+  fi
+
+  if [[ ! -s "$excerpt_file" ]]; then
+    echo "[trigger] $group: local excerpt payload is empty for Ollama fallback"
+    rm -f "$excerpt_file" "$prompt_file"
+    return 1
+  fi
+
+  cat > "$prompt_file" <<PROMPT_EOF
+Read the podcast transcript excerpt payload below and produce a concise market briefing (400-600 words).
+
+Structure the output in two sections:
+1. THEMATIC OVERVIEW — summarize the dominant macro/market themes and important events.
+2. PER-SHOW HIGHLIGHTS — list each podcast/show with 1-2 sentences of notable insights.
+
+Write in natural prose. Do not include preamble text.
+
+--- EXCERPT PAYLOAD START ---
+$(cat "$excerpt_file")
+--- EXCERPT PAYLOAD END ---
+PROMPT_EOF
+
+  if ! python3 "$OLLAMA_WRAPPER" --prompt-file "$prompt_file" --output-file "$summary_file" 2>&1; then
+    echo "[trigger] $group: Ollama fallback summarization failed"
+    rm -f "$excerpt_file" "$prompt_file"
+    return 1
+  fi
+
+  if [[ ! -s "$summary_file" ]]; then
+    echo "[trigger] $group: Ollama fallback produced empty summary"
+    rm -f "$excerpt_file" "$prompt_file"
+    return 1
+  fi
+
+  if [[ "$SEND_TO_TELEGRAM" == "true" && "$DRY_RUN" != "true" ]]; then
+    if [[ -x "$OPENCLAW_BIN" ]]; then
+      summary_content="$(head -c 4000 "$summary_file")"
+      "$OPENCLAW_BIN" message send \
+        --channel telegram \
+        --target "$TELEGRAM_TARGET" \
+        -m "Podcast Digest ($group) [Ollama fallback]:
+
+$summary_content" \
+        2>/dev/null || true
+    else
+      echo "[trigger] $group: Open Claw binary not found at $OPENCLAW_BIN (summary not sent)"
+    fi
+  fi
+
+  echo "[trigger] $group: local Ollama fallback succeeded"
+  echo "SUMMARY_FILE: $summary_file"
+  echo "SUMMARY_SOURCE: ollama"
+  rm -f "$excerpt_file" "$prompt_file"
+  return 0
+}
+
 trigger_group() {
   local group="$1"
   local body_file
@@ -154,11 +235,11 @@ PY
       -X POST "${WEBHOOK_CRON_URL%/}/api/pipelines/podcast-summary" \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer $WEBHOOK_CRON_API_TOKEN" \
-      --data-binary "@$body_file"
-  )"
+      --data-binary "@$body_file" 2>&1
+  )" || true
   rm -f "$body_file"
 
-  python3 - "$group" "$response" <<'PY'
+  if python3 - "$group" "$response" <<'PY'
 import json, sys
 group = sys.argv[1]
 raw = sys.argv[2]
@@ -176,7 +257,20 @@ if already:
     print(f"[trigger] {group}: already processed ({status})")
 else:
     print(f"[trigger] {group}: {status}")
+print("SUMMARY_SOURCE: server")
 PY
+  then
+    return 0
+  fi
+
+  echo "[trigger] $group: server trigger failed; trying local Ollama fallback..."
+  if trigger_ollama_fallback "$group"; then
+    return 0
+  fi
+
+  echo "[trigger] $group: server + Ollama fallback both failed"
+  echo "SUMMARY_SOURCE: needs-fallback"
+  return 1
 }
 
 groups="$(resolve_groups || true)"
