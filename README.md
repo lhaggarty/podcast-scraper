@@ -14,6 +14,7 @@ A Python CLI tool that fetches podcast RSS feeds, transcribes episodes with [fas
   - [scrape](#scrape)
   - [adhoc](#adhoc)
   - [export](#export)
+  - [export-json](#export-json)
   - [list](#list)
 - [Automated Pipeline (scrape-podcasts.sh)](#automated-pipeline-scrape-podcastssh)
 - [Features](#features)
@@ -26,7 +27,10 @@ A Python CLI tool that fetches podcast RSS feeds, transcribes episodes with [fas
 
 ```
 RSS feeds → podcast-scraper (fetch + transcribe) → SQLite
-  → export → text-summary-tool digest → AI summary → Telegram
+  → export-json (excerpted payload) → webhook-cron-serverless /api/pipelines/podcast-summary
+  → mcp-for-next.js summary + Telegram
+  → local SUMMARY_FILE → audio-digest
+  → (fallback) local Cursor Agent summary → Open Claw fallback
 ```
 
 ---
@@ -194,6 +198,34 @@ Episodes are separated by `---` delimiters, compatible with `text-summary-tool d
 
 The `[Feed Name]:` prefix is auto-detected by the digest tool's author pattern matching.
 
+### export-json
+
+```bash
+python3 src/cli.py export-json [options]
+```
+
+Export size-bounded transcript excerpts as JSON for server-side summarization.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-f, --feeds-file <path>` | `feeds.json` | Path to feeds config (used with `-g`) |
+| `-g, --group <name>` | all feeds | Feed group to export |
+| `-l, --lookback <hours>` | `168` (7 days) | How far back to look for episodes |
+| `--max-episodes-total <N>` | `40` | Max episodes in the full payload |
+| `--max-episodes-per-feed <N>` | `4` | Max episodes per feed |
+| `--excerpt-chars <N>` | `10000` | Max excerpt length per episode transcript |
+| `--db <path>` | `data/podcasts.db` | SQLite database path |
+
+```bash
+# Build server payload for one group
+python3 src/cli.py export-json -g macro -l 168 > /tmp/podcasts_macro_excerpt.json
+
+# Tighter payload bounds
+python3 src/cli.py export-json -g macro --max-episodes-total 20 --max-episodes-per-feed 2 --excerpt-chars 6000
+```
+
+This command prints JSON-only output to stdout so it can be piped directly into `curl -d`.
+
 ### list
 
 ```bash
@@ -223,11 +255,12 @@ The shell script runs the full pipeline end-to-end, with AI summarization and Te
 ### Steps
 
 ```
-Step 1: Scrape feeds (python3 src/cli.py scrape -g GROUP -n 1)
-Step 2: Export transcripts (python3 src/cli.py export -g GROUP -l 168)
-Step 3: Run text-summary-tool digest on the export file
-Step 4: AI summarization via Cursor Agent CLI (with Open Claw fallback)
-  → Send summary to Telegram
+Step 1: Scrape feeds locally (SQLite)
+Step 2: Build excerpted JSON payload (export-json)
+Step 3: POST to webhook-cron-serverless /api/pipelines/podcast-summary
+Step 4a: On server success, write SUMMARY_FILE and continue local post-processing
+Step 4b: On server failure, summarize locally via Cursor Agent CLI (Open Claw fallback remains)
+Step 5: Generate audio episode via audio-digest
 ```
 
 ### Server-side summary (recommended)
@@ -257,8 +290,19 @@ When running `./scrape-podcasts.sh all`, it will send separate digests per group
 
 ### Summarization strategy
 
-1. **Primary**: Cursor Agent CLI (`~/.local/bin/agent`) with `gemini-3-pro` model and a 120-second timeout
-2. **Fallback**: If Cursor Agent fails (timeout, missing binary, error), the script signals Open Claw to perform fallback summarization using the digest file
+1. **Primary**: Server-side summary via `webhook-cron-serverless` + `mcp-for-next.js`
+2. **Secondary**: Local Cursor Agent CLI summary (when server path fails)
+3. **Fallback**: Open Claw fallback summarization if local Cursor Agent fails
+
+Machine-readable markers emitted in logs/output:
+
+```text
+SUMMARY_SOURCE: server
+SUMMARY_SOURCE: cursor-agent
+SUMMARY_SOURCE: needs-fallback
+EXCERPT_JSON_FILE: /tmp/podcasts_<group>_excerpt.json
+AGENT_FAIL_REASON: <reason>
+```
 
 ### Logging
 
