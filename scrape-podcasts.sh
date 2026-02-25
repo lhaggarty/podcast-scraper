@@ -48,11 +48,16 @@ if [[ -f "$SCRAPER_DIR/.env" ]]; then
 fi
 
 WEBHOOK_CRON_URL="${WEBHOOK_CRON_URL:-}"
-WEBHOOK_CRON_API_TOKEN="${WEBHOOK_CRON_API_TOKEN:-}"
+WEBHOOK_CRON_API_TOKEN="${WEBHOOK_CRON_API_TOKEN:-${WEBHOOK_CRON_API_SECRET:-${API_TOKEN:-}}}"
 
 PIPELINE_DRY_RUN="false"
 case "${PODCAST_PIPELINE_DRY_RUN:-}" in
   1|true|TRUE|yes|YES) PIPELINE_DRY_RUN="true" ;;
+esac
+
+SKIP_SCRAPE="false"
+case "${PODCAST_SKIP_SCRAPE:-}" in
+  1|true|TRUE|yes|YES) SKIP_SCRAPE="true" ;;
 esac
 
 get_groups() {
@@ -72,19 +77,24 @@ PY
 }
 
 # --- Step 1: Scrape feeds (fetch + transcribe) ---
-echo "$LOG_PREFIX [scrape] Scraping podcast feeds..."
-set +e
-if [[ "$MODE" == "all" ]]; then
-  SCRAPE_OUTPUT=$(python3 src/cli.py scrape -n 1 2>&1)
+SCRAPE_EXIT=0
+if [[ "$SKIP_SCRAPE" == "true" ]]; then
+  echo "$LOG_PREFIX [scrape] Skipped feed scrape (PODCAST_SKIP_SCRAPE=true)"
 else
-  SCRAPE_OUTPUT=$(python3 src/cli.py scrape -g "$MODE" -n 1 2>&1)
-fi
-SCRAPE_EXIT=$?
-set -e
-echo "$SCRAPE_OUTPUT"
+  echo "$LOG_PREFIX [scrape] Scraping podcast feeds..."
+  set +e
+  if [[ "$MODE" == "all" ]]; then
+    SCRAPE_OUTPUT=$(python3 src/cli.py scrape -n 1 2>&1)
+  else
+    SCRAPE_OUTPUT=$(python3 src/cli.py scrape -g "$MODE" -n 1 2>&1)
+  fi
+  SCRAPE_EXIT=$?
+  set -e
+  echo "$SCRAPE_OUTPUT"
 
-if [[ "$SCRAPE_EXIT" -ne 0 ]]; then
-  echo "$LOG_PREFIX Scrape failed (exit: $SCRAPE_EXIT)"
+  if [[ "$SCRAPE_EXIT" -ne 0 ]]; then
+    echo "$LOG_PREFIX Scrape failed (exit: $SCRAPE_EXIT)"
+  fi
 fi
 
 PODCAST_GROUPS="$(get_groups || true)"
@@ -145,6 +155,7 @@ PY
 
   local server_ok="false"
   local summary_ok="false"
+  local summary_source_value=""
   local agent_fail_reason=""
   local send_to_telegram="true"
   local dry_run="false"
@@ -172,7 +183,7 @@ PY
     ) || true
 
     if [[ -n "$server_body" ]]; then
-      local server_endpoint="${WEBHOOK_CRON_URL%/}/api/pipelines/podcast-summary"
+      local server_endpoint="${WEBHOOK_CRON_URL%/}/api/pipelines/podcast-summary-audio"
       local server_response=""
       server_response=$(
         curl -sS -m 120 \
@@ -203,7 +214,8 @@ PY
 import json, sys
 try:
     data = json.loads(sys.argv[1])
-    text = data.get("summaryText")
+    summary = data.get("summary") or {}
+    text = summary.get("summaryText")
     if isinstance(text, str) and text.strip():
         print(text.strip())
 except Exception:
@@ -216,7 +228,8 @@ PY
             summary_ok="true"
           fi
 
-          echo "$LOG_PREFIX [server-summary] Success (Telegram sent server-side)"
+          summary_source_value="server"
+          echo "$LOG_PREFIX [server-summary] Success (Telegram + audio enqueue handled server-side)"
           echo "SUMMARY_SOURCE: server"
           echo "SUMMARY_FILE: $summary_file"
         else
@@ -276,6 +289,7 @@ EXPECT_EOF
       if [[ "$agent_exit" -eq 0 && -s "$summary_file" ]]; then
         echo "$LOG_PREFIX [summary] Cursor Agent CLI succeeded"
         summary_ok="true"
+        summary_source_value="cursor-agent"
       else
         agent_fail_reason="exit code $agent_exit"
         [[ "$agent_exit" -eq 1 ]] && grep -q "AGENT_TIMEOUT" "$summary_file" 2>/dev/null && agent_fail_reason="timed out after 120s"
@@ -314,6 +328,7 @@ EXPECT_EOF
       echo "EXCERPT_JSON_FILE: $excerpt_json_file"
       echo "AGENT_FAIL_REASON: ${agent_fail_reason:-unknown}"
       echo "SUMMARY_SOURCE: needs-fallback"
+      summary_source_value="needs-fallback"
     fi
   fi
 
@@ -334,7 +349,7 @@ EXPECT_EOF
 
   # --- Audio Digest: generate audio version ---
   local audio_digest_dir="/Users/leonhaggarty/code/audio-digest"
-  if [[ -d "$audio_digest_dir/venv" && -s "$summary_file" ]]; then
+  if [[ -d "$audio_digest_dir/venv" && -s "$summary_file" && "$summary_source_value" != "server" ]]; then
     echo "$LOG_PREFIX [audio] Generating audio from AI summary..."
     (
       cd "$audio_digest_dir" \

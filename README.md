@@ -27,9 +27,10 @@ A Python CLI tool that fetches podcast RSS feeds, transcribes episodes with [fas
 
 ```
 RSS feeds → podcast-scraper (fetch + transcribe) → SQLite
-  → export-json (excerpted payload) → webhook-cron-serverless /api/pipelines/podcast-summary
+  → export-json (excerpted payload) → webhook-cron-serverless /api/pipelines/podcast-summary-audio
   → mcp-for-next.js summary + Telegram
-  → local SUMMARY_FILE → audio-digest
+  → server audio enqueue (audio-queue worker)
+  → local SUMMARY_FILE → audio-digest (fallback path)
   → (fallback) local Cursor Agent summary → Open Claw fallback
 ```
 
@@ -257,10 +258,10 @@ The shell script runs the full pipeline end-to-end, with AI summarization and Te
 ```
 Step 1: Scrape feeds locally (SQLite)
 Step 2: Build excerpted JSON payload (export-json)
-Step 3: POST to webhook-cron-serverless /api/pipelines/podcast-summary
-Step 4a: On server success, write SUMMARY_FILE and continue local post-processing
+Step 3: POST to webhook-cron-serverless /api/pipelines/podcast-summary-audio
+Step 4a: On server success, summary + Telegram + audio enqueue are handled server-side
 Step 4b: On server failure, summarize locally via Cursor Agent CLI (Open Claw fallback remains)
-Step 5: Generate audio episode via audio-digest
+Step 5: On local fallback success, generate audio episode via audio-digest
 ```
 
 ### Server-side summary (recommended)
@@ -270,10 +271,17 @@ local summarization + Telegram send on success (to avoid duplicates):
 
 ```bash
 export WEBHOOK_CRON_URL="https://elaborate-conkies-8ddce1z.netlify.app"
-export WEBHOOK_CRON_API_TOKEN="..." # Bearer token for /api/pipelines/podcast-summary
+export WEBHOOK_CRON_API_TOKEN="..." # Bearer token for /api/pipelines/podcast-summary-audio
 ```
 
 When running `./scrape-podcasts.sh all`, it will send separate digests per group.
+
+Optional cron/reconcile mode:
+
+```bash
+# Skip Step 1 scrape and only run summary/audio reconcile
+export PODCAST_SKIP_SCRAPE=true
+```
 
 ### Usage
 
@@ -290,9 +298,10 @@ When running `./scrape-podcasts.sh all`, it will send separate digests per group
 
 ### Summarization strategy
 
-1. **Primary**: Server-side summary via `webhook-cron-serverless` + `mcp-for-next.js`
+1. **Primary**: Server-side summary+audio via `/api/pipelines/podcast-summary-audio`
 2. **Secondary**: Local Cursor Agent CLI summary (when server path fails)
 3. **Fallback**: Open Claw fallback summarization if local Cursor Agent fails
+4. **Audio fallback**: Local `audio-digest` generation when local summary succeeds
 
 Machine-readable markers emitted in logs/output:
 
