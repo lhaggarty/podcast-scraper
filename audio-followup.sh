@@ -173,7 +173,7 @@ PY
   fi
 
   cat > "$prompt_file" <<PROMPT_EOF
-Read the podcast transcript excerpt payload below and produce a concise market briefing (500-700 words).
+Read the podcast transcript excerpt payload below and produce a concise market briefing (600-800 words).
 
 Use exactly two sections:
 1) THEMATIC OVERVIEW
