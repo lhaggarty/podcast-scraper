@@ -6,8 +6,15 @@ from dataclasses import dataclass, field
 from time import mktime
 from typing import Optional
 
+import socket
+
 import feedparser
 import requests
+
+
+FEED_FETCH_TIMEOUT = 30        # seconds for feedparser HTTP request
+TRANSCRIPT_FETCH_TIMEOUT = 30  # seconds for Podcast 2.0 transcript download
+TRANSCRIPT_MAX_BYTES = 10 * 1024 * 1024  # 10 MB cap
 
 
 @dataclass
@@ -80,18 +87,39 @@ def _get_episode_id(entry, feed_url: str) -> str:
 
 
 def fetch_transcript(url: str) -> Optional[str]:
-    """Download a Podcast 2.0 transcript from a URL."""
+    """Download a Podcast 2.0 transcript from a URL.
+
+    Returns None on any network error or if the response exceeds
+    TRANSCRIPT_MAX_BYTES to avoid hanging on unexpectedly large payloads.
+    """
     try:
-        resp = requests.get(url, timeout=30)
+        resp = requests.get(
+            url,
+            stream=True,
+            timeout=(10, TRANSCRIPT_FETCH_TIMEOUT),
+        )
         resp.raise_for_status()
-        return resp.text
+        chunks = []
+        total = 0
+        for chunk in resp.iter_content(chunk_size=64 * 1024):
+            total += len(chunk)
+            if total > TRANSCRIPT_MAX_BYTES:
+                return None
+            chunks.append(chunk)
+        return b"".join(chunks).decode("utf-8", errors="replace")
     except requests.RequestException:
         return None
 
 
 def parse_feed(feed_name: str, feed_url: str, max_episodes: int = 1) -> list[Episode]:
     """Parse an RSS feed and return the latest episodes."""
-    feed = feedparser.parse(feed_url)
+    # feedparser has no built-in timeout; use a socket-level default.
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(FEED_FETCH_TIMEOUT)
+    try:
+        feed = feedparser.parse(feed_url)
+    finally:
+        socket.setdefaulttimeout(old_timeout)
 
     if feed.bozo and not feed.entries:
         raise ValueError(f"Failed to parse feed: {feed_url} — {feed.bozo_exception}")

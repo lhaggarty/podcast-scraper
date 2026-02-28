@@ -78,21 +78,25 @@ PY
 
 # --- Step 1: Scrape feeds (fetch + transcribe) ---
 SCRAPE_EXIT=0
+# Maximum wall-clock time for the full feed scrape before we give up.
+SCRAPE_TIMEOUT_SECS="${PODCAST_SCRAPE_TIMEOUT:-1800}"  # default: 30 min
 if [[ "$SKIP_SCRAPE" == "true" ]]; then
   echo "$LOG_PREFIX [scrape] Skipped feed scrape (PODCAST_SKIP_SCRAPE=true)"
 else
-  echo "$LOG_PREFIX [scrape] Scraping podcast feeds..."
+  echo "$LOG_PREFIX [scrape] Scraping podcast feeds (timeout: ${SCRAPE_TIMEOUT_SECS}s)..."
   set +e
   if [[ "$MODE" == "all" ]]; then
-    SCRAPE_OUTPUT=$(python3 src/cli.py scrape -n 1 2>&1)
+    SCRAPE_OUTPUT=$(timeout "$SCRAPE_TIMEOUT_SECS" python3 src/cli.py scrape -n 1 2>&1)
   else
-    SCRAPE_OUTPUT=$(python3 src/cli.py scrape -g "$MODE" -n 1 2>&1)
+    SCRAPE_OUTPUT=$(timeout "$SCRAPE_TIMEOUT_SECS" python3 src/cli.py scrape -g "$MODE" -n 1 2>&1)
   fi
   SCRAPE_EXIT=$?
   set -e
   echo "$SCRAPE_OUTPUT"
 
-  if [[ "$SCRAPE_EXIT" -ne 0 ]]; then
+  if [[ "$SCRAPE_EXIT" -eq 124 ]]; then
+    echo "$LOG_PREFIX [scrape] Scrape timed out after ${SCRAPE_TIMEOUT_SECS}s"
+  elif [[ "$SCRAPE_EXIT" -ne 0 ]]; then
     echo "$LOG_PREFIX Scrape failed (exit: $SCRAPE_EXIT)"
   fi
 fi
@@ -117,16 +121,18 @@ run_group() {
   # Export full transcripts to a file (useful for manual debugging and fallback).
   echo "$LOG_PREFIX [export] Exporting transcripts (group: $group)..."
   set +e
-  python3 src/cli.py export -g "$group" -l 168 -o "$export_file" 2>&1
+  timeout 120 python3 src/cli.py export -g "$group" -l 168 -o "$export_file" 2>&1
   local export_exit=$?
   set -e
-  if [[ "$export_exit" -ne 0 ]]; then
+  if [[ "$export_exit" -eq 124 ]]; then
+    echo "$LOG_PREFIX [export] Export timed out — continuing"
+  elif [[ "$export_exit" -ne 0 ]]; then
     echo "$LOG_PREFIX [export] Export failed (exit: $export_exit) — continuing"
   fi
 
   # Build size-bounded excerpt payload for summarization (JSON-only on stdout).
   local excerpt_json=""
-  excerpt_json=$(python3 src/cli.py export-json -g "$group" -l 168 \
+  excerpt_json=$(timeout 120 python3 src/cli.py export-json -g "$group" -l 168 \
     --max-episodes-total 40 --max-episodes-per-feed 4 --excerpt-chars 10000 2>/dev/null) || true
 
   if [[ -n "$excerpt_json" ]]; then
