@@ -22,6 +22,8 @@ DRY_RUN="${DRY_RUN:-false}"
 OLLAMA_WRAPPER="${OLLAMA_WRAPPER:-/Users/leonhaggarty/code/text-summary-tool/ollama-fallback.py}"
 OPENCLAW_BIN="${OPENCLAW_BIN:-/Users/leonhaggarty/.nvm/versions/node/v24.13.0/bin/openclaw}"
 TELEGRAM_TARGET="${TELEGRAM_TARGET:-6113620394}"
+OLLAMA_TIMEOUT_SECS="${OLLAMA_TIMEOUT:-300}"   # 5-minute cap on local LLM calls
+EXPORT_TIMEOUT_SECS=120                        # cap on transcript export subprocesses
 
 case "$SEND_TO_TELEGRAM" in
   1|true|TRUE|yes|YES) SEND_TO_TELEGRAM="true" ;;
@@ -80,7 +82,8 @@ post_cache_group() {
   excerpt_file="$(mktemp /tmp/podcast-excerpt.XXXXXX.json)"
   body_file="$(mktemp /tmp/podcast-cache-body.XXXXXX.json)"
 
-  python3 src/cli.py export-json -g "$group" -l "$LOOKBACK_HOURS" \
+  timeout "$EXPORT_TIMEOUT_SECS" python3 src/cli.py export-json \
+    -g "$group" -l "$LOOKBACK_HOURS" \
     --max-episodes-total 40 --max-episodes-per-feed 4 --excerpt-chars 10000 \
     > "$excerpt_file"
 
@@ -142,10 +145,16 @@ trigger_ollama_fallback() {
   prompt_file="$(mktemp /tmp/podcast-ollama-prompt.XXXXXX.txt)"
   summary_file="/tmp/podcast_${group}_summary.txt"
 
-  if ! python3 src/cli.py export-json -g "$group" -l "$LOOKBACK_HOURS" \
-    --max-episodes-total 24 --max-episodes-per-feed 3 --excerpt-chars 5000 \
-    > "$excerpt_file"; then
-    echo "[trigger] $group: failed to build local excerpt payload for Ollama fallback"
+  if ! timeout "$EXPORT_TIMEOUT_SECS" python3 src/cli.py export-json \
+      -g "$group" -l "$LOOKBACK_HOURS" \
+      --max-episodes-total 24 --max-episodes-per-feed 3 --excerpt-chars 5000 \
+      > "$excerpt_file"; then
+    local ex=$?
+    if [[ "$ex" -eq 124 ]]; then
+      echo "[trigger] $group: export-json timed out building Ollama payload"
+    else
+      echo "[trigger] $group: failed to build local excerpt payload for Ollama fallback"
+    fi
     rm -f "$excerpt_file" "$prompt_file"
     return 1
   fi
@@ -170,8 +179,14 @@ $(cat "$excerpt_file")
 --- EXCERPT PAYLOAD END ---
 PROMPT_EOF
 
-  if ! python3 "$OLLAMA_WRAPPER" --prompt-file "$prompt_file" --output-file "$summary_file" 2>&1; then
-    echo "[trigger] $group: Ollama fallback summarization failed"
+  if ! timeout "$OLLAMA_TIMEOUT_SECS" python3 "$OLLAMA_WRAPPER" \
+      --prompt-file "$prompt_file" --output-file "$summary_file" 2>&1; then
+    local ex=$?
+    if [[ "$ex" -eq 124 ]]; then
+      echo "[trigger] $group: Ollama fallback timed out after ${OLLAMA_TIMEOUT_SECS}s"
+    else
+      echo "[trigger] $group: Ollama fallback summarization failed"
+    fi
     rm -f "$excerpt_file" "$prompt_file"
     return 1
   fi

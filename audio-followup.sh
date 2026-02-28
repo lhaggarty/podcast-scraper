@@ -17,6 +17,8 @@ WEBHOOK_CRON_URL_DEFAULT=""
 WEBHOOK_CRON_API_TOKEN_DEFAULT=""
 OLLAMA_WRAPPER="${OLLAMA_WRAPPER:-/Users/leonhaggarty/code/text-summary-tool/ollama-fallback.py}"
 AUDIO_DIGEST_DIR="/Users/leonhaggarty/code/audio-digest"
+OLLAMA_TIMEOUT_SECS="${OLLAMA_TIMEOUT:-300}"   # 5-minute cap on local LLM calls
+EXPORT_TIMEOUT_SECS=120                        # cap on transcript export subprocesses
 
 log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
@@ -146,11 +148,17 @@ try_ollama_summary() {
   excerpt_file="$(mktemp /tmp/podcast-audio-excerpt.XXXXXX.json)"
   prompt_file="$(mktemp /tmp/podcast-audio-prompt.XXXXXX.txt)"
 
-  if ! python3 src/cli.py export-json -g "$group" -l "$LOOKBACK_HOURS" \
-    --max-episodes-total 24 --max-episodes-per-feed 3 --excerpt-chars 5000 \
-    > "$excerpt_file"; then
+  if ! timeout "$EXPORT_TIMEOUT_SECS" python3 src/cli.py export-json \
+      -g "$group" -l "$LOOKBACK_HOURS" \
+      --max-episodes-total 24 --max-episodes-per-feed 3 --excerpt-chars 5000 \
+      > "$excerpt_file"; then
+    local ex=$?
     rm -f "$excerpt_file" "$prompt_file"
-    log "[ollama] Failed to export excerpts for group=$group"
+    if [[ "$ex" -eq 124 ]]; then
+      log "[ollama] export-json timed out for group=$group"
+    else
+      log "[ollama] Failed to export excerpts for group=$group"
+    fi
     return 1
   fi
 
@@ -186,9 +194,15 @@ $(cat "$excerpt_file")
 --- EXCERPT PAYLOAD END ---
 PROMPT_EOF
 
-  if ! python3 "$OLLAMA_WRAPPER" --prompt-file "$prompt_file" --output-file "$summary_file" >/dev/null 2>&1; then
+  if ! timeout "$OLLAMA_TIMEOUT_SECS" python3 "$OLLAMA_WRAPPER" \
+      --prompt-file "$prompt_file" --output-file "$summary_file" >/dev/null 2>&1; then
+    local ex=$?
     rm -f "$excerpt_file" "$prompt_file"
-    log "[ollama] Summarization failed for group=$group"
+    if [[ "$ex" -eq 124 ]]; then
+      log "[ollama] Summarization timed out after ${OLLAMA_TIMEOUT_SECS}s for group=$group"
+    else
+      log "[ollama] Summarization failed for group=$group"
+    fi
     return 1
   fi
 
