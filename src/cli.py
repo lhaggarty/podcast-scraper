@@ -349,7 +349,7 @@ def main():
     p_export = subparsers.add_parser("export", help="Export recent transcripts to text file")
     p_export.add_argument("-f", "--feeds-file", default=DEFAULT_FEEDS, help="Path to feeds.json")
     p_export.add_argument("-g", "--group", help="Feed group to export")
-    p_export.add_argument("-l", "--lookback", type=int, default=168, help="Lookback hours (default: 168 = 7 days)")
+    p_export.add_argument("-l", "--lookback", type=int, default=120, help="Lookback hours (default: 120 = 5 days)")
     p_export.add_argument("-o", "--output", help="Output file path (default: /tmp/podcasts_{group}_export.txt)")
     p_export.add_argument("--db", default=DEFAULT_DB, help="SQLite database path")
 
@@ -360,7 +360,7 @@ def main():
     )
     p_export_json.add_argument("-f", "--feeds-file", default=DEFAULT_FEEDS, help="Path to feeds.json")
     p_export_json.add_argument("-g", "--group", help="Feed group to export")
-    p_export_json.add_argument("-l", "--lookback", type=int, default=168, help="Lookback hours (default: 168 = 7 days)")
+    p_export_json.add_argument("-l", "--lookback", type=int, default=120, help="Lookback hours (default: 120 = 5 days)")
     p_export_json.add_argument("--max-episodes-total", type=int, default=40, help="Max episodes to include across all feeds (default: 40)")
     p_export_json.add_argument("--max-episodes-per-feed", type=int, default=4, help="Max episodes per feed (default: 4)")
     p_export_json.add_argument("--excerpt-chars", type=int, default=10000, help="Max chars per transcript excerpt (default: 10000)")

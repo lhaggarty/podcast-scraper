@@ -117,7 +117,7 @@ run_group() {
   # Export full transcripts to a file (useful for manual debugging and fallback).
   echo "$LOG_PREFIX [export] Exporting transcripts (group: $group)..."
   set +e
-  python3 src/cli.py export -g "$group" -l 168 -o "$export_file" 2>&1
+  python3 src/cli.py export -g "$group" -l 120 -o "$export_file" 2>&1
   local export_exit=$?
   set -e
   if [[ "$export_exit" -ne 0 ]]; then
@@ -126,7 +126,7 @@ run_group() {
 
   # Build size-bounded excerpt payload for summarization (JSON-only on stdout).
   local excerpt_json=""
-  excerpt_json=$(python3 src/cli.py export-json -g "$group" -l 168 \
+  excerpt_json=$(python3 src/cli.py export-json -g "$group" -l 120 \
     --max-episodes-total 40 --max-episodes-per-feed 4 --excerpt-chars 10000 2>/dev/null) || true
 
   if [[ -n "$excerpt_json" ]]; then
