@@ -371,5 +371,6 @@ if [[ "$PIPELINE_DRY_RUN" != "true" && "$SCRAPE_EXIT" -ne 0 ]] && [[ -x "$OPENCL
     2>/dev/null || true
 fi
 
+date +%s > "$SCRAPER_DIR/.last-success"
 echo "$LOG_PREFIX Finished (exit: $SCRAPE_EXIT)"
 exit "$SCRAPE_EXIT"
