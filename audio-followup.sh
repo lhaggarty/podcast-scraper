@@ -12,7 +12,7 @@ FEEDS_FILE="$SCRAPER_DIR/feeds.json"
 LOG_FILE="$SCRAPER_DIR/audio-followup.log"
 TARGET="${1:-all}"
 
-LOOKBACK_HOURS="${LOOKBACK_HOURS:-168}"
+LOOKBACK_HOURS="${LOOKBACK_HOURS:-120}"
 WEBHOOK_CRON_URL_DEFAULT=""
 WEBHOOK_CRON_API_TOKEN_DEFAULT=""
 OLLAMA_WRAPPER="${OLLAMA_WRAPPER:-/Users/leonhaggarty/code/text-summary-tool/ollama-fallback.py}"
