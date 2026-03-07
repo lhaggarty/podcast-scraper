@@ -157,7 +157,7 @@ trigger_ollama_fallback() {
   fi
 
   cat > "$prompt_file" <<PROMPT_EOF
-Read the podcast transcript excerpt payload below and produce a concise market briefing (400-600 words).
+Read the podcast transcript excerpt payload below and produce a detailed market briefing (600-900 words). Retain specific facts, names, figures, and events — avoid generalizing.
 
 Structure the output in two sections:
 1. THEMATIC OVERVIEW — summarize the dominant macro/market themes and important events.

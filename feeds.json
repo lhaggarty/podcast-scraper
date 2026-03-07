@@ -5,12 +5,14 @@
       "feed_url": "https://feed.podbean.com/ttmygh/feed.xml"
     },
     {
-      "name": "Redefining Energy",
-      "feed_url": "https://www.spreaker.com/show/3170008/episodes/feed"
-    },
-    {
       "name": "The Loonie Hour",
       "feed_url": "https://anchor.fm/s/103db19ac/podcast/rss"
+    }
+  ],
+  "energy": [
+    {
+      "name": "Redefining Energy",
+      "feed_url": "https://www.spreaker.com/show/3170008/episodes/feed"
     }
   ],
   "crypto": [

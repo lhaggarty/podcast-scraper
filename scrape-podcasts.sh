@@ -246,7 +246,7 @@ PY
     local prompt_file=""
     prompt_file=$(mktemp /tmp/podcast-summary-prompt.XXXXXX)
     cat > "$prompt_file" <<PROMPT_EOF
-Read the podcast transcript excerpts below (JSON) and produce a concise briefing (300-500 words).
+Read the podcast transcript excerpts below (JSON) and produce a detailed briefing (500-700 words). Retain specific facts, names, figures, and events — avoid generalizing.
 
 Output format (exact headings):
 THEMATIC OVERVIEW
