@@ -249,11 +249,8 @@ PY
 Read the podcast transcript excerpts below (JSON) and produce a detailed briefing (500-700 words). Retain specific facts, names, figures, and events — avoid generalizing.
 
 Output format (exact headings):
-THEMATIC OVERVIEW
-<1-2 short paragraphs of cross-show themes and key takeaways>
-
 PER-PODCAST HIGHLIGHTS
-<One short paragraph per podcast/feed, 1-3 sentences each>
+<One detailed paragraph per podcast/feed with specific facts, names, and figures>
 
 Do NOT include any preamble like "Here is the summary".
 Just output the briefing text directly.
