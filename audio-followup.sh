@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # audio-followup.sh -- build audio episodes from latest podcast summaries
 # Strategy per group:
-# 1) Try server summary API (includeSummaryText, no Telegram send)
-# 2) If unavailable, summarize locally via Ollama from export-json excerpts
-# 3) Generate audio with audio-digest
+# 1) Get server summary (the Telegram digest text, carried forward if needed)
+# 2) Generate a fresh local summary via Ollama from recency-capped excerpts
+# 3) If both available, merge them (dedup + keep best parts)
+# 4) Generate audio with audio-digest
 
 set -euo pipefail
 
@@ -17,6 +18,7 @@ WEBHOOK_CRON_URL_DEFAULT=""
 WEBHOOK_CRON_API_TOKEN_DEFAULT=""
 OLLAMA_WRAPPER="${OLLAMA_WRAPPER:-/Users/leonhaggarty/code/text-summary-tool/ollama-fallback.py}"
 AUDIO_DIGEST_DIR="/Users/leonhaggarty/code/audio-digest"
+MAX_OLLAMA_LOOKBACK_HOURS="${MAX_OLLAMA_LOOKBACK_HOURS:-96}"
 
 log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
@@ -53,9 +55,11 @@ for k in data.keys():
 PY
 }
 
+# try_server_summary GROUP OUT_FILE [PROCESSED_AT_FILE]
 try_server_summary() {
   local group="$1"
   local summary_file="$2"
+  local processed_at_file="${3:-}"
   local body_file
   local response
   local parse_result
@@ -99,10 +103,11 @@ PY
   fi
 
   parse_result="$(
-    python3 - "$response" "$summary_file" <<'PY'
+    python3 - "$response" "$summary_file" "${processed_at_file:-}" <<'PY'
 import json, sys
 raw = sys.argv[1]
 out_path = sys.argv[2]
+pa_path = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else ""
 try:
     data = json.loads(raw)
 except Exception:
@@ -111,6 +116,13 @@ except Exception:
 if not data.get("ok"):
     print("not_ok")
     raise SystemExit(1)
+
+if pa_path:
+    pa = data.get("processedAt") or ""
+    if pa:
+        with open(pa_path, "w") as f:
+            f.write(str(pa))
+
 text = data.get("summaryText")
 if isinstance(text, str) and text.strip():
     with open(out_path, "w", encoding="utf-8") as f:
@@ -131,9 +143,33 @@ PY
   return 1
 }
 
+compute_recency_hours() {
+  local pa_file="$1"
+  python3 - "$pa_file" "$MAX_OLLAMA_LOOKBACK_HOURS" <<'PY'
+import sys
+from datetime import datetime, timezone
+
+pa_path = sys.argv[1]
+max_hours = int(sys.argv[2])
+try:
+    with open(pa_path) as f:
+        raw = f.read().strip()
+    if "T" in raw:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    else:
+        dt = datetime.fromtimestamp(float(raw) / 1000, tz=timezone.utc)
+    hours = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
+    hours = max(2, min(int(hours) + 2, max_hours))
+    print(hours)
+except Exception:
+    print(max_hours)
+PY
+}
+
 try_ollama_summary() {
   local group="$1"
   local summary_file="$2"
+  local lookback="${3:-$LOOKBACK_HOURS}"
   local excerpt_file
   local prompt_file
   local episode_count
@@ -146,7 +182,8 @@ try_ollama_summary() {
   excerpt_file="$(mktemp /tmp/podcast-audio-excerpt.XXXXXX.json)"
   prompt_file="$(mktemp /tmp/podcast-audio-prompt.XXXXXX.txt)"
 
-  if ! python3 src/cli.py export-json -g "$group" -l "$LOOKBACK_HOURS" \
+  log "[ollama] Exporting episodes for group=$group (lookback=${lookback}h)"
+  if ! python3 src/cli.py export-json -g "$group" -l "$lookback" \
     --max-episodes-total 24 --max-episodes-per-feed 3 --excerpt-chars 5000 \
     > "$excerpt_file"; then
     rm -f "$excerpt_file" "$prompt_file"
@@ -198,7 +235,55 @@ PROMPT_EOF
     return 1
   fi
 
-  log "[ollama] Summary ready for group=$group"
+  log "[ollama] Summary ready for group=$group (lookback=${lookback}h)"
+  return 0
+}
+
+try_merge_summaries() {
+  local server_file="$1"
+  local ollama_file="$2"
+  local out_file="$3"
+  local prompt_file
+
+  if [[ ! -f "$OLLAMA_WRAPPER" ]]; then
+    log "[merge] Wrapper missing at $OLLAMA_WRAPPER"
+    return 1
+  fi
+
+  prompt_file="$(mktemp /tmp/podcast-audio-merge-prompt.XXXXXX.txt)"
+  cat > "$prompt_file" <<MERGE_EOF
+You have two independently-generated summaries of the same podcast digest covering the same time window. Merge them into a single, comprehensive briefing.
+
+Rules:
+- Deduplicate: where both cover the same episode/topic, keep the version with more specific facts, figures, or context.
+- Include unique insights that only appear in one summary.
+- Do NOT add content beyond what is in the two summaries.
+- Maintain the structure: THEMATIC OVERVIEW then PER-SHOW HIGHLIGHTS.
+- Target 800-1100 words.
+- No preamble. Output only the merged briefing text.
+
+--- SUMMARY A (primary) ---
+$(cat "$server_file")
+--- END SUMMARY A ---
+
+--- SUMMARY B (supplementary) ---
+$(cat "$ollama_file")
+--- END SUMMARY B ---
+MERGE_EOF
+
+  if ! python3 "$OLLAMA_WRAPPER" --prompt-file "$prompt_file" --output-file "$out_file" >/dev/null 2>&1; then
+    rm -f "$prompt_file"
+    log "[merge] Merge failed"
+    return 1
+  fi
+  rm -f "$prompt_file"
+
+  if [[ ! -s "$out_file" ]]; then
+    log "[merge] Empty merge output"
+    return 1
+  fi
+
+  log "[merge] Merged summary ready"
   return 0
 }
 
@@ -231,28 +316,53 @@ fail_count=0
 
 for group in $groups; do
   summary_file="/tmp/podcast_${group}_summary.txt"
-  rm -f "$summary_file" || true
+  server_file="/tmp/podcast_${group}_server.txt"
+  ollama_file="/tmp/podcast_${group}_ollama.txt"
+  pa_file="/tmp/podcast_${group}_processedAt.txt"
+  rm -f "$summary_file" "$server_file" "$ollama_file" "$pa_file" || true
   summary_source=""
 
-  if try_server_summary "$group" "$summary_file"; then
-    summary_source="server"
+  has_server=false
+  has_ollama=false
+
+  if try_server_summary "$group" "$server_file" "$pa_file"; then
+    has_server=true
+  fi
+
+  ollama_lookback="$MAX_OLLAMA_LOOKBACK_HOURS"
+  if [[ -s "$pa_file" ]]; then
+    ollama_lookback="$(compute_recency_hours "$pa_file")"
+    log "[recency] Capped Ollama lookback to ${ollama_lookback}h based on last processedAt"
+  fi
+
+  if try_ollama_summary "$group" "$ollama_file" "$ollama_lookback"; then
+    has_ollama=true
   else
-    if try_ollama_summary "$group" "$summary_file"; then
-      summary_source="ollama"
-    else
-      ollama_exit=$?
-      if [[ "$ollama_exit" -eq 2 ]]; then
-        log "[group=$group] No summary content available; skipping audio."
-        echo "SUMMARY_SOURCE: needs-fallback"
-        echo "AUDIO_STATUS: skipped-no-content"
-        continue
-      fi
-      log "[group=$group] Server + Ollama summary failed."
-      echo "SUMMARY_SOURCE: needs-fallback"
-      echo "AUDIO_STATUS: failed"
-      fail_count=$((fail_count + 1))
-      continue
+    ollama_exit=$?
+    if [[ "$ollama_exit" -eq 2 ]]; then
+      log "[group=$group] No recent episode content for local summary."
     fi
+  fi
+
+  if $has_server && $has_ollama; then
+    if try_merge_summaries "$server_file" "$ollama_file" "$summary_file"; then
+      summary_source="merged"
+    else
+      log "[group=$group] Merge failed; using server summary."
+      cp "$server_file" "$summary_file"
+      summary_source="server"
+    fi
+  elif $has_server; then
+    cp "$server_file" "$summary_file"
+    summary_source="server"
+  elif $has_ollama; then
+    cp "$ollama_file" "$summary_file"
+    summary_source="ollama"
+  else
+    log "[group=$group] No summary content available; skipping audio."
+    echo "SUMMARY_SOURCE: none"
+    echo "AUDIO_STATUS: skipped-no-content"
+    continue
   fi
 
   if generate_audio "$group" "$summary_file"; then
