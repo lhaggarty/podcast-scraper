@@ -212,9 +212,9 @@ PY
   cat > "$prompt_file" <<PROMPT_EOF
 Read the podcast transcript excerpt payload below and produce a detailed market briefing (800-1100 words). Retain specific facts, names, figures, and events — avoid generalizing.
 
-Use exactly two sections:
-1) THEMATIC OVERVIEW
-2) PER-SHOW HIGHLIGHTS
+Use this structure:
+PER-SHOW HIGHLIGHTS
+<One detailed paragraph per podcast/show with specific facts, names, and figures>
 
 No preamble. Output only briefing text.
 
@@ -258,7 +258,7 @@ Rules:
 - Deduplicate: where both cover the same episode/topic, keep the version with more specific facts, figures, or context.
 - Include unique insights that only appear in one summary.
 - Do NOT add content beyond what is in the two summaries.
-- Maintain the structure: THEMATIC OVERVIEW then PER-SHOW HIGHLIGHTS.
+- Maintain the structure: PER-SHOW HIGHLIGHTS (one paragraph per show).
 - Target 800-1100 words.
 - No preamble. Output only the merged briefing text.
 
