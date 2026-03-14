@@ -84,25 +84,21 @@ def fetch_recent(
     lookback_hours: int = 120,
     feed_name: Optional[str] = None,
 ) -> list[dict]:
-    """Fetch episodes published within the lookback window.
-
-    Uses published_at (original release date) when available,
-    falling back to scraped_at for episodes with missing metadata.
-    """
+    """Fetch episodes scraped within the lookback window."""
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=lookback_hours)).isoformat()
 
     if feed_name:
         rows = conn.execute(
             """SELECT * FROM episodes
-               WHERE COALESCE(published_at, scraped_at) >= ? AND feed_name = ?
-               ORDER BY published_at DESC""",
+               WHERE scraped_at >= ? AND feed_name = ?
+               ORDER BY scraped_at DESC""",
             (cutoff, feed_name),
         ).fetchall()
     else:
         rows = conn.execute(
             """SELECT * FROM episodes
-               WHERE COALESCE(published_at, scraped_at) >= ?
-               ORDER BY published_at DESC""",
+               WHERE scraped_at >= ?
+               ORDER BY scraped_at DESC""",
             (cutoff,),
         ).fetchall()
 
@@ -114,13 +110,13 @@ def fetch_by_group(
     feed_names: list[str],
     lookback_hours: int = 120,
 ) -> list[dict]:
-    """Fetch episodes for a list of feed names published within the lookback window."""
+    """Fetch episodes for a list of feed names scraped within the lookback window."""
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=lookback_hours)).isoformat()
     placeholders = ",".join("?" for _ in feed_names)
     rows = conn.execute(
         f"""SELECT * FROM episodes
-            WHERE COALESCE(published_at, scraped_at) >= ? AND feed_name IN ({placeholders})
-            ORDER BY published_at DESC""",
+            WHERE scraped_at >= ? AND feed_name IN ({placeholders})
+            ORDER BY scraped_at DESC""",
         [cutoff] + feed_names,
     ).fetchall()
     return [dict(row) for row in rows]
